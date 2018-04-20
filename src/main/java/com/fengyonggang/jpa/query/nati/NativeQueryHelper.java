@@ -4,8 +4,6 @@
 package com.fengyonggang.jpa.query.nati;
 
 import java.lang.reflect.Field;
-import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -28,11 +26,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Sort.Order;
 import org.springframework.util.Assert;
+import org.springframework.util.NumberUtils;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
 
 import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.Join;
 import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.ParamValuePair;
+import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.Where;
 
 /**
  * @author fengyonggang
@@ -66,6 +66,14 @@ public class NativeQueryHelper {
 	
 	public <T> List<T> query(NativeQueryMetadata metadata) {
 		return queryList(metadata);
+	}
+	
+	public <T> T findOne(NativeQueryMetadata metadata) {
+		List<T> list = queryList(metadata);
+		if (list != null && list.size() > 0) {
+			return list.get(0);
+		}
+		return null;
 	}
 	
 	private <T> List<T> queryList(NativeQueryMetadata metadata) {
@@ -102,7 +110,7 @@ public class NativeQueryHelper {
 						LOGGER.warn("can not find field {} from class {}", entry.getKey(), metadata.getResultClass());
 					} else {
 						ReflectionUtils.makeAccessible(field);
-						ReflectionUtils.setField(field, mapperedRow, convertValue(entry.getValue()));
+						ReflectionUtils.setField(field, mapperedRow, convertValue(entry.getValue(), field.getType()));
 					}
 				}
 				mapperedResult.add(mapperedRow);
@@ -111,14 +119,20 @@ public class NativeQueryHelper {
 		return mapperedResult;
 	}
 	
-	private Object convertValue(Object value) {
-		if (value instanceof BigInteger) {
-			value = ((BigInteger) value).longValue();
-		} else if (value instanceof Character) {
-			value = value.toString();
-		} else if (value instanceof BigDecimal) {
-			value = ((BigDecimal) value).doubleValue();
+	@SuppressWarnings("unchecked")
+	private Object convertValue(Object value, Class<?> expectedType) {
+		if (value == null) {
+			return null;
 		}
+		
+		if (value instanceof Number && Number.class.isAssignableFrom(expectedType)) {
+			return NumberUtils.convertNumberToTargetClass((Number) value, (Class<? extends Number>) expectedType);
+		}
+		
+		if (String.class.isAssignableFrom(expectedType)) {
+			value = value.toString();
+		}
+		
 		return value;
 	}
 	
@@ -289,27 +303,35 @@ public class NativeQueryHelper {
 		return fieldMap;
 	}
 	
-	private String buildWhere(List<ParamValuePair> pairs) {
-		if (pairs == null || pairs.isEmpty()) {
-			return "";
-		}
-
+	private String buildWhere(Where where) {
 		StringBuilder builder = new StringBuilder();
-		for (ParamValuePair pair : pairs) {
-			if (builder.length() > 0) {
-				builder.append(" and ");
+		if (where.getStatements() != null) {
+			for (String statement : where.getStatements()) {
+				if (builder.length() > 0) {
+					builder.append(" and ");
+				}
+				builder.append(statement);
 			}
-			builder.append(pair.getParam());
 		}
-		return "where " + builder.toString();
+		
+		if (where.getPairs() != null) {
+			for (ParamValuePair pair : where.getPairs()) {
+				if (builder.length() > 0) {
+					builder.append(" and ");
+				}
+				builder.append(pair.getParam());
+			}
+		}
+		return builder.length() == 0 ? "" : ("where " + builder.toString());
 	}
 	
-	private void setParameter(Query query, List<ParamValuePair> pairs) {
-		if (pairs == null || pairs.isEmpty()) {
+	private void setParameter(Query query, Where where) {
+		if (where.getPairs() == null || where.getPairs().isEmpty()) {
 			return ;
 		}
+		
 		int position = 1;
-		for (ParamValuePair pair : pairs) {
+		for (ParamValuePair pair : where.getPairs()) {
 			if (pair.getValue() instanceof Collection) {
 				for (Object v : (Collection<?>) pair.getValue()) {
 					query.setParameter(position ++, v);
@@ -318,6 +340,6 @@ public class NativeQueryHelper {
 				query.setParameter(position ++, pair.getValue());
 			}
 		}
-		LOGGER.debug("sql parameters: {}", pairs);
+		LOGGER.debug("sql parameters: {}", where.getPairs());
 	}
 }

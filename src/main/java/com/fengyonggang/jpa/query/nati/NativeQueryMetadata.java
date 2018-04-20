@@ -1,8 +1,7 @@
-package com.fengyonggang.jpa.query.nati;
 /**
  * 
  */
-
+package com.fengyonggang.jpa.query.nati;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,14 +26,10 @@ public class NativeQueryMetadata {
 	private List<Join> joins = new ArrayList<>();
 	private List<String> orderBys = new ArrayList<>();
 	private String groupby;
-	private List<ParamValuePair> where = new ArrayList<>();
+	private Where where = new Where(); 
 	private Class<?> resultClass;
 	
 	private static final Pattern IN_PATTERN = Pattern.compile("in\\s+\\?", Pattern.CASE_INSENSITIVE);
-	
-	public void addWhere(ParamValuePair pair) {
-		this.where.add(pair);
-	}
 	
 	public void addWhere(String param, Object value) {
 		if (checkValue(value)) {
@@ -52,8 +47,12 @@ public class NativeQueryMetadata {
 				}
 				value = stringValue;
 			}
-			this.addWhere(new ParamValuePair(param, value));
+			this.where.addWhere(new ParamValuePair(param, value));
 		}
+	}
+	
+	public void addWhere(String statement) {
+		this.where.addWhere(statement);
 	}
 	
 	private String buildPlaceHolder(int size) {
@@ -115,6 +114,20 @@ public class NativeQueryMetadata {
 				}
 			}
 			return false;
+		}
+	}
+	
+	@Data
+	public static class Where {
+		private List<String> statements = new ArrayList<>(); 
+		private List<ParamValuePair> pairs = new ArrayList<>();
+		
+		public void addWhere(ParamValuePair pair) {
+			this.pairs.add(pair);
+		}
+		
+		public void addWhere(String statement) {
+			this.statements.add(statement);
 		}
 	}
 	
