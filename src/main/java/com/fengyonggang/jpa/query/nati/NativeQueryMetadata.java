@@ -11,8 +11,10 @@ import java.util.regex.Pattern;
 
 import org.springframework.util.StringUtils;
 
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Setter;
 
 /**
  * @author fengyonggang
@@ -23,11 +25,14 @@ public class NativeQueryMetadata {
 
 	private String select; 
 	private String from; 
+	@Setter(AccessLevel.PRIVATE)
+	private From subQuery;
 	private List<Join> joins = new ArrayList<>();
 	private List<String> orderBys = new ArrayList<>();
 	private String groupby;
 	private Where where = new Where(); 
 	private Class<?> resultClass;
+	private Integer limit;
 	
 	private static final Pattern IN_PATTERN = Pattern.compile("in\\s+\\?", Pattern.CASE_INSENSITIVE);
 	
@@ -46,9 +51,19 @@ public class NativeQueryMetadata {
 					param = param.replace("?%", "?");
 				}
 				value = stringValue;
+			} else if (value instanceof Enum) {
+				value = ((Enum<?>) value).name();
 			}
 			this.where.addWhere(new ParamValuePair(param, value));
 		}
+	}
+	
+	public void setFrom(String from) {
+		this.from = from;
+	}
+	
+	public void setFrom(NativeQueryMetadata from, String alias) {
+		this.subQuery = new From(from, alias);
 	}
 	
 	public void addWhere(String statement) {
@@ -66,6 +81,14 @@ public class NativeQueryMetadata {
 			this.joins.add(new Join(join));
 		} else {
 			this.joins.add(new Join(join, Arrays.asList(params)));
+		}
+	}
+	
+	public void addJoin(String keyWord, NativeQueryMetadata join, String alias, String joinCondition, Object ... params) {
+		if (params == null || params.length == 0) {
+			this.joins.add(new Join(new JoinMeta(keyWord, join, alias, joinCondition)));
+		} else {
+			this.joins.add(new Join(new JoinMeta(keyWord, join, alias, joinCondition), Arrays.asList(params)));
 		}
 	}
 	
@@ -91,9 +114,36 @@ public class NativeQueryMetadata {
 	}
 	
 	@Data
+	@AllArgsConstructor
+	public static class From {
+		private NativeQueryMetadata fromMeta;
+		private String alias;
+	}
+	
+	@Data
+	@AllArgsConstructor
+	public static class JoinMeta {
+		private String joinKeyWord;
+		private NativeQueryMetadata meta;
+		private String alias;
+		private String joinCondition;
+	}
+	
+	@Data
 	public static class Join {
 		private String join;
+		private JoinMeta joinMeta;
 		private List<Object> params;
+		
+		public Join(JoinMeta joinMeta) {
+			this.joinMeta = joinMeta;
+			this.params = Arrays.asList(true);
+		}
+		
+		public Join(JoinMeta joinMeta, List<Object> params) {
+			this.joinMeta = joinMeta;
+			this.params = params;
+		}
 		
 		public Join(String join) {
 			this.join = join;

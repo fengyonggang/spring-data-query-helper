@@ -30,7 +30,9 @@ import org.springframework.util.NumberUtils;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
 
+import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.From;
 import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.Join;
+import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.JoinMeta;
 import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.ParamValuePair;
 import com.fengyonggang.jpa.query.nati.NativeQueryMetadata.Where;
 
@@ -64,6 +66,10 @@ public class NativeQueryHelper {
 		return new PageImpl<>(list, pageable, count);
 	}
 	
+	public <T> List<T> query(NativeQueryMetadata metadata, int limit, Sort sort) {
+		return queryList(metadata, sort, 0, limit);
+	}
+	
 	public <T> List<T> query(NativeQueryMetadata metadata) {
 		return queryList(metadata);
 	}
@@ -76,50 +82,81 @@ public class NativeQueryHelper {
 		return null;
 	}
 	
+	public String getQuery(NativeQueryMetadata metadata) {
+		return this.buildSql(metadata);
+	}
+	
+	public String getCountQuery(NativeQueryMetadata metadata) {
+		return this.buildCountSql(metadata);
+	}
+	
 	private <T> List<T> queryList(NativeQueryMetadata metadata) {
 		return queryList(metadata, null);
 	}
 	
 	private <T> List<T> queryList(NativeQueryMetadata metadata, Pageable pageable) {
-		String sql = buildSql(metadata, pageable == null ? null : pageable.getSort());
+		int offset = 0;
+		int pageSize = Integer.MAX_VALUE;
+		
+		if (pageable != null) {
+			offset = pageable.getOffset();
+			pageSize = pageable.getPageSize();
+		} else if (metadata.getLimit() != null && metadata.getLimit() > 0) {
+			pageSize = metadata.getLimit();
+		}
+		return queryList(metadata, pageable == null ? null : pageable.getSort(), offset, pageSize);
+	}
+	
+	private <T> List<T> queryList(NativeQueryMetadata metadata, Sort sort, int offset, int pageSize) {
+		String sql = buildSql(metadata, sort);
 		LOGGER.debug("sql to be executed: {}", sql);
 		
 		Query query = entityManager.createNativeQuery(sql);
-		setParameter(query, metadata.getWhere());
+		setParameter(query, metadata);
 		query.unwrap(SQLQuery.class).setResultTransformer(Transformers.ALIAS_TO_ENTITY_MAP);
-		if (pageable != null) {
-			query.setFirstResult(pageable.getOffset());
-			query.setMaxResults(pageable.getPageSize());
-		}
+		
+		 query.setFirstResult(offset);
+		 query.setMaxResults(pageSize);
 		
 		List<?> result = query.getResultList();
 		
+		return handleResult(result, metadata.getResultClass());
+	}
+	
+	@SuppressWarnings("unchecked")
+	private <T> List<T> handleResult(List<?> result, Class<?> resultType) {
 		List<T> mapperedResult = new ArrayList<>();
-		
 		if (!result.isEmpty()) {
-			Assert.notNull(metadata.getResultClass(), "result class should not be null");
-			
-			for (Object rowObj : result) {
-				@SuppressWarnings("unchecked")
-				Map<String, Object> row = (Map<String, Object>) rowObj;
-				@SuppressWarnings("unchecked")
-				T mapperedRow = (T) BeanUtils.instantiate(metadata.getResultClass());
-				for(Entry<String, Object> entry : row.entrySet()) {
-					Field field = findField(metadata.getResultClass(), entry.getKey());
-					if (field == null) {
-						LOGGER.warn("can not find field {} from class {}", entry.getKey(), metadata.getResultClass());
-					} else {
-						ReflectionUtils.makeAccessible(field);
-						ReflectionUtils.setField(field, mapperedRow, convertValue(entry.getValue(), field.getType()));
+			if (resultType == null && ((Map<String, Object>) result.get(0)).size() == 1) {
+				// just one field 
+				for (Object rowObj : result) {
+					Map<String, Object> row = (Map<String, Object>) rowObj;
+					for (Object value : row.values()) {
+						mapperedResult.add((T) value);
 					}
 				}
-				mapperedResult.add(mapperedRow);
+			} else {
+				Assert.notNull(resultType, "result class should not be null");
+				for (Object rowObj : result) {
+					Map<String, Object> row = (Map<String, Object>) rowObj;
+					T mapperedRow = (T) BeanUtils.instantiate(resultType);
+					for(Entry<String, Object> entry : row.entrySet()) {
+						Field field = findField(resultType, entry.getKey());
+						if (field == null) {
+							LOGGER.warn("can not find field {} from class {}", entry.getKey(), resultType);
+						} else {
+							ReflectionUtils.makeAccessible(field);
+							ReflectionUtils.setField(field, mapperedRow, convertValue(entry.getValue(), field.getType()));
+						}
+					}
+					mapperedResult.add(mapperedRow);
+				}
 			}
 		} 
 		return mapperedResult;
 	}
 	
-	@SuppressWarnings("unchecked")
+	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private Object convertValue(Object value, Class<?> expectedType) {
 		if (value == null) {
 			return null;
@@ -131,6 +168,10 @@ public class NativeQueryHelper {
 		
 		if (String.class.isAssignableFrom(expectedType)) {
 			value = value.toString();
+		}
+		
+		if (Enum.class.isAssignableFrom(expectedType)) {
+			value = Enum.valueOf((Class<? extends Enum>) expectedType, value.toString());
 		}
 		
 		return value;
@@ -165,12 +206,16 @@ public class NativeQueryHelper {
 		String sql = buildCountSql(metadata);
 		LOGGER.debug("sql to be executed: {}", sql);
 		Query query = entityManager.createNativeQuery(sql);
-		setParameter(query, metadata.getWhere());
+		setParameter(query, metadata);
 		return ((Number) query.getSingleResult()).longValue();
 	}
 
 	private String buildCountSql(NativeQueryMetadata metadata) {
 		return "select count(1) from (" + buildSql(metadata, null, true) + ") t";
+	}
+	
+	private String buildSql(NativeQueryMetadata metadata) {
+		return buildSql(metadata, null);
 	}
 	
 	private String buildSql(NativeQueryMetadata metadata, Sort sort) {
@@ -181,11 +226,20 @@ public class NativeQueryHelper {
 		StringBuilder builder = new StringBuilder();
 		
 		appendAndCheckStartWord(builder, metadata.getSelect(), "select");
-		appendAndCheckStartWord(builder, metadata.getFrom(), "from");
+		
+		if (metadata.getSubQuery() != null) {
+			buildFrom(builder, metadata.getSubQuery());
+		} else {
+			appendAndCheckStartWord(builder, metadata.getFrom(), "from");
+		}
 		
 		for (Join join : metadata.getJoins()) {
 			if (join.isJoin()) {
-				builder.append(join.getJoin()).append(SPACE);
+				if (join.getJoinMeta() != null) {
+					buildJoin(builder, join.getJoinMeta());
+				} else {
+					builder.append(join.getJoin()).append(SPACE);
+				}
 			}
 		}
 		
@@ -198,6 +252,17 @@ public class NativeQueryHelper {
 		}
 		
 		return builder.toString();
+	}
+	
+	private void buildFrom(StringBuilder builder, From from) {
+		String fromQuery = buildSql(from.getFromMeta());
+		builder.append("from (").append(fromQuery).append(")").append(SPACE).append(from.getAlias()).append(SPACE);
+	}
+	
+	private void buildJoin(StringBuilder builder, JoinMeta joinMeta) {
+		String fromQuery = buildSql(joinMeta.getMeta());
+		builder.append(joinMeta.getJoinKeyWord()).append(" (").append(fromQuery).append(")").append(SPACE)
+				.append(joinMeta.getAlias()).append(SPACE).append("on").append(SPACE).append(joinMeta.getJoinCondition()).append(SPACE);
 	}
 	
 	private void appendAndCheckStartWord(StringBuilder builder, String str, String startWord) {
@@ -325,12 +390,28 @@ public class NativeQueryHelper {
 		return builder.length() == 0 ? "" : ("where " + builder.toString());
 	}
 	
-	private void setParameter(Query query, Where where) {
-		if (where.getPairs() == null || where.getPairs().isEmpty()) {
-			return ;
+	public void setParameter(Query query, NativeQueryMetadata meta) {
+		int position = 1;
+		if (meta.getSubQuery() != null) {
+			Where where = meta.getSubQuery().getFromMeta().getWhere();
+			position = setParameter(query, where, position);
 		}
 		
-		int position = 1;
+		for (Join join : meta.getJoins()) {
+			if (join.getJoinMeta() != null && join.isJoin()) {
+				Where where = join.getJoinMeta().getMeta().getWhere();
+				position = setParameter(query, where, position);
+			}
+		}
+		
+		position = setParameter(query, meta.getWhere(), position);
+	}
+	
+	private int setParameter(Query query, Where where, int position) {
+		if (where.getPairs() == null || where.getPairs().isEmpty()) {
+			return position;
+		}
+		
 		for (ParamValuePair pair : where.getPairs()) {
 			if (pair.getValue() instanceof Collection) {
 				for (Object v : (Collection<?>) pair.getValue()) {
@@ -341,5 +422,7 @@ public class NativeQueryHelper {
 			}
 		}
 		LOGGER.debug("sql parameters: {}", where.getPairs());
+		return position;
 	}
+	
 }
