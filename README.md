@@ -1,7 +1,8 @@
-# native-query-helper
-To build native query dynamically for jpa or spring data project
+# spring-data-query-helper
+Dynamically build spring data query statements
 
-# Usage
+
+## Build native query
 ```java
 public Page<User> searchUser(UserParam param, Pageable pageable) {
     NativeQueryMetadata md = new NativeQueryMetadata();
