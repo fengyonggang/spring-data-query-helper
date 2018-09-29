@@ -1,6 +1,51 @@
+
 # spring-data-query-helper
 Dynamically build spring data query statements
 
+## Build predicates dynamically
+```java
+class UserPredicateBuilder implements PredicateBuilder<UserParam> {
+	public List<Predicate> build(Root<?> root, CriteriaQuery<?> query, CriteriaBuilder cb, UserParam userParam) {
+		List<Predicate> predicates = null;
+		if (userParam.getOtherProps() != null) {
+			predicates = new ArrayList<>();
+			for (Entry<String, Object> entry : userParam.getOtherProps().entrySet()) {
+				predicates.add(cb.equal(root.get(entry.getKey()), entry.getValue()));
+			}
+		}
+		return predicates;
+	}
+}
+
+@PredicateClass(UserPredicateBuilder.class)
+class UserParam {
+	private Integer id;
+	private String userName;
+	@PredicateField(propertyName = "birthday", operation = QueryOperation.greaterThanOrEqualTo)
+	private Date birthdayFrom;
+	@PredicateField(propertyName = "birthday", operation = QueryOperation.lessThanOrEqualTo)
+	private Date birthdayTo;
+	@PredicateField(operation = QueryOperation.in)
+	private List<String> favorites;
+	@PredicateField(operation = QueryOperation.likePrefix)
+	private String profile;
+	@PredicateField(ignore = true)
+	private Map<String, Object> otherProps;
+}
+
+interface UserRepository extends JpaRepository<UserEntity>, JpaSpecificationExecutor {
+
+}
+
+class UserService {
+	@Autowired
+	private UserRepository userRepository;
+	
+	public Page<User> searchUser(UserParam userParam, Pageable pageable) {
+		return userRepository.search(SpecificationUtils.build(userParam), pageable);
+	}
+}
+```
 
 ## Build native query
 ```java
