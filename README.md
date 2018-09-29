@@ -33,7 +33,7 @@ class UserParam {
 	private Map<String, Object> otherProps;
 }
 
-interface UserRepository extends JpaRepository<UserEntity>, JpaSpecificationExecutor {
+interface UserRepository extends JpaRepository<User>, JpaSpecificationExecutor {
 
 }
 
